@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+GetRounded.app/
+logo.iconset/
+dist/
+.remember/
+*-rounded.png
+.DS_Store

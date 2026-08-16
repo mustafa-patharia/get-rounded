@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en" class="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GetRounded</title>
+<link rel="icon" href="logo.png">
+<script src="tailwind.js"></script>
+<script>
+tailwind.config = { darkMode: 'class' }
+</script>
+<style>
+  /* shadcn/ui design tokens */
+  :root {
+    --background: 0 0% 100%; --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%; --muted: 240 4.8% 95.9%; --muted-foreground: 240 3.8% 46.1%;
+    --primary: 240 5.9% 10%; --primary-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%; --ring: 240 5.9% 10%; --radius: 0.5rem;
+  }
+  .dark {
+    --background: 240 10% 3.9%; --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%; --muted: 240 3.7% 15.9%; --muted-foreground: 240 5% 64.9%;
+    --primary: 0 0% 98%; --primary-foreground: 240 5.9% 10%;
+    --border: 240 3.7% 15.9%; --ring: 240 4.9% 83.9%;
+  }
+  body { background: hsl(var(--background)); color: hsl(var(--foreground)); }
+  .btn { border-radius: var(--radius); font-size: .875rem; font-weight: 500;
+         height: 2.25rem; padding: 0 1rem; display: inline-flex; align-items: center;
+         justify-content: center; gap: .5rem; transition: opacity .15s, background .15s;
+         white-space: nowrap; }
+  .btn:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+  .btn:disabled { opacity: .5; pointer-events: none; }
+  .btn-primary { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+  .btn-primary:hover { opacity: .9; }
+  .btn-outline { border: 1px solid hsl(var(--border)); background: transparent; }
+  .btn-outline:hover { background: hsl(var(--muted)); }
+  .card { background: hsl(var(--card)); border: 1px solid hsl(var(--border));
+          border-radius: calc(var(--radius) + 4px); }
+  .muted { color: hsl(var(--muted-foreground)); }
+  input[type=range] { -webkit-appearance: none; appearance: none; height: .5rem;
+    background: hsl(var(--muted)); border-radius: 9999px; width: 100%; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 1.15rem;
+    width: 1.15rem; border-radius: 9999px; background: hsl(var(--background));
+    border: 2px solid hsl(var(--primary)); cursor: pointer; }
+  input[type=range]::-moz-range-thumb { height: 1.15rem; width: 1.15rem; border-radius: 9999px;
+    background: hsl(var(--background)); border: 2px solid hsl(var(--primary)); cursor: pointer; }
+  /* ---- motion ---- */
+  #stage { position: relative; display: inline-block; }
+  #preview { transition: transform .35s cubic-bezier(.34,1.3,.64,1), filter .3s ease; }
+  #stage.busy #preview { transform: scale(.97); filter: saturate(.6) brightness(.85); }
+  #stage.pop  #preview { animation: pop .5s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes pop { 0%{transform:scale(.97)} 45%{transform:scale(1.04)} 100%{transform:scale(1)} }
+
+  /* laser sweep that travels down the image while saving */
+  #sweep { position: absolute; inset: 0; overflow: hidden; border-radius: inherit;
+           opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #stage.busy #sweep { opacity: 1; }
+  #sweep::before { content: ''; position: absolute; left: 0; right: 0; height: 42%;
+    background: linear-gradient(to bottom, transparent,
+      hsl(var(--foreground) / .18) 45%, hsl(var(--foreground) / .55) 50%,
+      hsl(var(--foreground) / .18) 55%, transparent);
+    animation: sweep 1s ease-in-out infinite; }
+  @keyframes sweep { from { top: -45% } to { top: 105% } }
+
+  /* corner guides: arcs drawn on the real radius, fading when you stop */
+  #guide { position: absolute; inset: 0; pointer-events: none;
+           opacity: 0; transition: opacity .45s ease; }
+  #guide.on { opacity: 1; transition: opacity .12s ease; }
+
+  /* progress bar under the drop zone */
+  #bar { height: 2px; background: hsl(var(--primary)); width: 0;
+         border-radius: 9999px; transition: width .3s ease; }
+
+  .spinner { width: .85rem; height: .85rem; border-radius: 9999px;
+    border: 2px solid hsl(var(--primary-foreground) / .35);
+    border-top-color: hsl(var(--primary-foreground));
+    animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+
+  #status { transition: color .2s; }
+  .ok { animation: fadeup .35s ease-out; }
+  @keyframes fadeup { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+  .link { color: hsl(var(--muted-foreground)); background: none; border: 0;
+          cursor: pointer; font-size: inherit; padding: 0; transition: color .15s; }
+  .link:hover { color: hsl(var(--foreground)); }
+
+  /* the cup lifts a little on hover, like it is being handed over */
+  .chai:hover .chai-cup { animation: steam .6s ease-in-out; }
+  @keyframes steam { 0%,100%{transform:translateY(0) rotate(0)}
+                     40%{transform:translateY(-3px) rotate(-8deg)} }
+
+  #about { animation: veil .18s ease-out; }
+  #about-panel { animation: panel .22s cubic-bezier(.34,1.4,.64,1); }
+  @keyframes veil { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes panel { from { opacity: 0; transform: translateY(10px) scale(.97) } to { opacity: 1 } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before { animation: none !important; transition: none !important; }
+  }
+
+  .checkers { background-image:
+      linear-gradient(45deg, hsl(var(--muted)) 25%, transparent 25%),
+      linear-gradient(-45deg, hsl(var(--muted)) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, hsl(var(--muted)) 75%),
+      linear-gradient(-45deg, transparent 75%, hsl(var(--muted)) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0px; }
+</style>
+</head>
+<body class="min-h-screen">
+<div class="mx-auto max-w-3xl px-6 py-10">
+
+  <header class="mb-8 flex items-start justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <img src="logo.png" alt="" width="44" height="44" class="rounded-[10px] shadow-sm">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">GetRounded</h1>
+        <p class="muted mt-1 text-sm">Drop images, set a radius, save. Nothing leaves your machine.</p>
+      </div>
+    </div>
+    <button id="theme" class="btn btn-outline" title="Toggle theme">◐</button>
+  </header>
+
+  <!-- drop zone -->
+  <div id="drop" class="card checkers grid min-h-[300px] cursor-pointer place-items-center
+       border-dashed p-6 text-center transition-colors">
+    <div id="empty" class="col-start-1 row-start-1 flex flex-col items-center gap-2">
+      <svg class="muted h-9 w-9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5-5 5 5"/><path d="M12 5v12"/>
+      </svg>
+      <p class="text-sm font-medium">Drop images here</p>
+      <p class="muted text-xs">or click to browse &middot; PNG, JPG, WebP</p>
+    </div>
+    <div id="stage" class="col-start-1 row-start-1 hidden">
+      <canvas id="preview" class="block max-h-[320px] max-w-full"></canvas>
+      <div id="sweep"></div>
+      <canvas id="guide"></canvas>
+    </div>
+  </div>
+  <div id="bar" class="mt-1"></div>
+  <input id="file" type="file" accept="image/*" multiple class="hidden">
+
+  <!-- controls -->
+  <div class="card mt-4 p-5">
+    <div class="mb-2 flex items-baseline justify-between">
+      <label for="radius" class="text-sm font-medium">Corner radius</label>
+      <span id="rval" class="muted text-sm tabular-nums">12% &middot; 0px</span>
+    </div>
+    <input id="radius" type="range" min="0" max="50" step="1" value="12">
+    <p class="muted mt-2 text-xs">Percentage of the image&rsquo;s shorter side, so it scales with any size.</p>
+
+    <div class="mt-5 flex flex-wrap items-center gap-2 border-t pt-5"
+         style="border-color: hsl(var(--border))">
+      <button id="save" class="btn btn-primary" disabled>Save rounded</button>
+      <button id="folder" class="btn btn-outline">Choose output folder</button>
+      <span id="status" class="muted text-sm"></span>
+    </div>
+  </div>
+
+  <p id="note" class="muted mt-4 text-xs"></p>
+
+  <footer class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4 text-xs"
+          style="border-color: hsl(var(--border))">
+    <span class="muted">GetRounded v1.0</span>
+    <button id="about-open" class="link">About</button>
+    <a href="https://buymeachai.in/mustafapatharia" data-ext class="link ml-auto chai">
+      <span class="chai-cup">☕</span> Buy me a chai
+    </a>
+  </footer>
+</div>
+
+<!-- About -->
+<div id="about" class="fixed inset-0 z-50 hidden items-center justify-center p-6">
+  <div id="about-veil" class="absolute inset-0" style="background: hsl(0 0% 0% / .55)"></div>
+  <div id="about-panel" class="card relative w-full max-w-md p-6">
+    <div class="flex items-center gap-3">
+      <img src="logo.png" alt="" width="48" height="48" class="rounded-xl">
+      <div>
+        <h2 class="text-lg font-semibold tracking-tight">GetRounded</h2>
+        <p class="muted text-xs">Version 1.0</p>
+      </div>
+      <button id="about-close" class="btn btn-outline ml-auto h-8 w-8 p-0" aria-label="Close">✕</button>
+    </div>
+
+    <p class="mt-4 text-sm leading-relaxed">
+      Round the corners of any image without opening a design tool. Drop it in,
+      set a radius, save. The result lands next to the original as
+      <code class="rounded px-1" style="background: hsl(var(--muted))">name-rounded.png</code>.
+    </p>
+
+    <dl class="mt-4 space-y-2 text-sm">
+      <div class="flex justify-between gap-4">
+        <dt class="muted">Privacy</dt>
+        <dd class="text-right">Fully offline — no uploads, no telemetry</dd>
+      </div>
+      <div class="flex justify-between gap-4">
+        <dt class="muted">Output</dt>
+        <dd class="text-right">PNG, to preserve transparency</dd>
+      </div>
+      <div class="flex justify-between gap-4">
+        <dt class="muted">Built with</dt>
+        <dd class="text-right">pywebview &middot; Tailwind &middot; Canvas</dd>
+      </div>
+      <div class="flex justify-between gap-4">
+        <dt class="muted">Licence</dt>
+        <dd class="text-right">MIT</dd>
+      </div>
+    </dl>
+
+    <div class="mt-5 flex items-center gap-2 border-t pt-4"
+         style="border-color: hsl(var(--border))">
+      <a href="https://buymeachai.in/mustafapatharia" data-ext class="btn btn-primary chai">
+        <span class="chai-cup">☕</span> Buy me a chai
+      </a>
+      <span class="muted text-xs">Made by Mustafa Patharia</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const canvas = $('preview'), ctx = canvas.getContext('2d');
+let images = [];        // {name, bitmap}
+let dirHandle = null;   // output folder (Chrome/Edge)
+
+let native = false;   // running inside the pywebview desktop shell
+const hasFS = 'showDirectoryPicker' in window;
+
+function setMode() {
+  if (native) {
+    $('folder').classList.add('hidden');
+    $('note').textContent = 'Saves land next to each original as name-rounded.png.';
+  } else {
+    $('note').textContent = hasFS
+      ? 'Tip: pick an output folder once and every save goes straight there — no dialogs.'
+      : 'This browser lacks the File System Access API, so saves go to your Downloads folder. Chrome or Edge can write to a folder you choose.';
+    $('folder').disabled = !hasFS;
+  }
+}
+window.addEventListener('pywebviewready', () => { native = true; setMode(); });
+setMode();
+
+// theme
+if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+$('theme').onclick = () => document.documentElement.classList.toggle('dark');
+
+// ---- core: draw image with rounded corners onto a canvas
+function render(bitmap, percent, target) {
+  const { width: w, height: h } = bitmap;
+  const r = Math.min(w, h) * percent / 100;
+  target.width = w; target.height = h;
+  const c = target.getContext('2d');
+  c.clearRect(0, 0, w, h);
+  c.save();
+  c.beginPath();
+  c.roundRect(0, 0, w, h, r);   // native since Chrome 99 / Safari 16.4 / Firefox 112
+  c.clip();
+  c.drawImage(bitmap, 0, 0);
+  c.restore();
+  return target;
+}
+
+function updatePreview() {
+  const p = +$('radius').value;
+  const img = images[0];
+  $('rval').textContent = img
+    ? `${p}% · ${Math.round(Math.min(img.bitmap.width, img.bitmap.height) * p / 100)}px`
+    : `${p}%`;
+  if (!img) return;
+  render(img.bitmap, p, canvas);
+  $('stage').classList.remove('hidden');
+  $('empty').classList.add('hidden');
+  drawGuide(p);
+}
+
+// Corner guides: arcs traced on the exact curve the image is being cut to, in
+// display pixels. Redrawn in place each frame — no element churn, no flicker.
+let guideTimer;
+function drawGuide(percent) {
+  const g = $('guide'), r = g.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  if (!r.width) return;
+  if (g.width !== Math.round(r.width * dpr)) {
+    g.width = Math.round(r.width * dpr);
+    g.height = Math.round(r.height * dpr);
+  }
+  const c = g.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, r.width, r.height);
+
+  const rad = Math.min(r.width, r.height) * percent / 100;
+  const arm = Math.max(14, Math.min(r.width, r.height) * 0.18);
+  const accent = getComputedStyle(document.documentElement)
+    .getPropertyValue('--ring').trim();
+
+  c.lineWidth = 2;
+  c.lineCap = 'round';
+  c.strokeStyle = `hsl(${accent})`;
+  c.shadowColor = `hsl(${accent} / .8)`;
+  c.shadowBlur = 8;
+
+  // one L-shaped bracket per corner, its elbow bent to the current radius
+  const w = r.width - 1, h = r.height - 1;
+  const corners = [
+    [0.5, 0.5,  1,  1], [w, 0.5, -1,  1],
+    [0.5, h,    1, -1], [w, h,   -1, -1],
+  ];
+  for (const [x, y, sx, sy] of corners) {
+    c.beginPath();
+    c.moveTo(x + sx * (rad + arm), y);
+    c.lineTo(x + sx * rad, y);
+    c.arcTo(x, y, x, y + sy * rad, rad);
+    c.lineTo(x, y + sy * (rad + arm));
+    c.stroke();
+  }
+
+  g.classList.add('on');
+  clearTimeout(guideTimer);
+  guideTimer = setTimeout(() => g.classList.remove('on'), 900);
+}
+
+function ready(list) {
+  images = list;
+  $('save').disabled = !list.length;
+  $('status').textContent = `${list.length} image${list.length > 1 ? 's' : ''} loaded`;
+  updatePreview();
+}
+
+async function load(files) {
+  const list = [...files].filter(f => f.type.startsWith('image/'));
+  if (!list.length) return;
+
+  // Inside pywebview, dropped files carry their real path — hand it to Python
+  // so the result can be written next to the original.
+  const paths = list.map(f => f.pywebviewFullPath).filter(Boolean);
+  if (native && paths.length === list.length) return loadPaths(paths);
+
+  ready(await Promise.all(list.map(async f => ({
+    name: f.name.replace(/\.[^.]+$/, '') + '-rounded.png',
+    bitmap: await createImageBitmap(f),
+  }))));
+}
+
+// native path: Python reads the file, we get name + full path + data URL
+async function loadPaths(paths) {
+  const files = await window.pywebview.api.read_paths(paths);
+  ready(await Promise.all(files.map(async f => ({
+    name: f.name.replace(/\.[^.]+$/, '') + '-rounded.png',
+    path: f.path,
+    bitmap: await createImageBitmap(await (await fetch(f.data)).blob()),
+  }))));
+}
+
+async function pickNative() {
+  const files = await window.pywebview.api.pick();
+  if (files.length) await loadPaths(files.map(f => f.path));
+}
+
+// ---- input wiring
+// coalesce slider input to one render per frame, so dragging stays smooth
+let frame;
+$('radius').oninput = () => {
+  if (frame) return;
+  frame = requestAnimationFrame(() => { frame = 0; updatePreview(); });
+};
+$('drop').onclick = () => (native ? pickNative() : $('file').click());
+// About dialog
+const about = $('about');
+function toggleAbout(show) {
+  about.classList.toggle('hidden', !show);
+  about.classList.toggle('flex', show);
+}
+$('about-open').onclick = () => toggleAbout(true);
+$('about-close').onclick = () => toggleAbout(false);
+$('about-veil').onclick = () => toggleAbout(false);
+document.addEventListener('keydown', e => e.key === 'Escape' && toggleAbout(false));
+
+// External links must leave the app window, not navigate it
+document.querySelectorAll('a[data-ext]').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  if (native) window.pywebview.api.open_url(a.href);
+  else window.open(a.href, '_blank', 'noopener');
+}));
+
+window.addEventListener('error', e => fail(e.error || e.message));
+window.addEventListener('unhandledrejection', e => fail(e.reason));
+$('file').onchange = e => load(e.target.files);
+
+// A drop anywhere outside the zone makes the webview navigate to the file and
+// destroys the app, so cancel dragging document-wide and accept drops anywhere.
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev =>
+  document.addEventListener(ev, e => e.preventDefault()));
+
+document.addEventListener('dragenter', () => $('drop').style.borderColor = 'hsl(var(--ring))');
+document.addEventListener('dragover', () => $('drop').style.borderColor = 'hsl(var(--ring))');
+document.addEventListener('dragleave', e => {
+  if (!e.relatedTarget) $('drop').style.borderColor = '';
+});
+document.addEventListener('drop', e => {
+  $('drop').style.borderColor = '';
+  // In the desktop shell Python handles the drop, because only it can see the
+  // real file paths needed to save next to the original.
+  if (!native && e.dataTransfer.files.length) load(e.dataTransfer.files);
+});
+
+$('folder').onclick = async () => {
+  try {
+    dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
+    $('status').textContent = `Saving to “${dirHandle.name}”`;
+  } catch { /* user cancelled */ }
+};
+
+// ---- save
+const toBlob = cv => new Promise(res => cv.toBlob(res, 'image/png'));
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function fail(e) {
+  console.error(e);
+  $('status').textContent = 'Error: ' + (e && e.message ? e.message : e);
+  $('status').style.color = 'hsl(0 72% 51%)';
+}
+
+$('save').onclick = async () => {
+  const p = +$('radius').value;
+  const work = document.createElement('canvas');
+  const btn = $('save'), stage = $('stage');
+  const label = btn.innerHTML;
+  let n = 0;
+
+  $('status').style.color = '';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Rounding…';
+  stage.classList.remove('pop');
+  stage.classList.add('busy');
+  const started = Date.now();
+
+  try {
+  for (const img of images) {
+    $('bar').style.width = (n / images.length * 100) + '%';
+    await sleep(0);   // let the sweep animation paint between files
+    if (native && img.path) {
+      await window.pywebview.api.save(img.path, render(img.bitmap, p, work).toDataURL('image/png'));
+      n++;
+      continue;
+    }
+    const blob = await toBlob(render(img.bitmap, p, work));
+    if (dirHandle) {
+      const fh = await dirHandle.getFileHandle(img.name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob); await w.close();
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = img.name;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    n++;
+  }
+  } catch (e) {
+    fail(e);
+    return;
+  } finally {
+    // let the sweep run long enough to be seen, even on instant saves
+    await sleep(Math.max(0, 650 - (Date.now() - started)));
+    $('bar').style.width = '100%';
+    stage.classList.remove('busy');
+    stage.classList.add('pop');
+    btn.disabled = false;
+    btn.innerHTML = label;
+    setTimeout(() => { $('bar').style.width = '0'; }, 500);
+  }
+
+  const s = n > 1 ? 's' : '';
+  $('status').textContent =
+    native    ? `Saved ${n} file${s} next to the original${s}` :
+    dirHandle ? `Saved ${n} file${s} to “${dirHandle.name}”`
+              : `Downloaded ${n} file${s}`;
+  $('status').classList.remove('ok'); void $('status').offsetWidth;
+  $('status').classList.add('ok');
+};
+</script>
+</body>
+</html>
