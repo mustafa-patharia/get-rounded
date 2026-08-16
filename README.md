@@ -57,7 +57,6 @@ works on a plane.
 - **Corner guides** that trace the exact curve your image is being cut to
 - **Radius as a percentage** of the shorter side, so one setting looks right on
   a 400 px avatar and a 4K screenshot alike
-- **Batch mode** — drop ten images, save them all at once
 - **Saves beside the original** as `name-rounded.png`; your source file is never
   modified
 - **Dark mode**, following the system setting, with a manual toggle
@@ -165,7 +164,7 @@ real shadcn components, which are React source requiring a build step this
 project deliberately avoids.
 
 Motion is functional. During a save the image dims and a light bar sweeps across
-it, a progress bar tracks batches, and the result pops back with a spring. All
+it, and the result pops back with a spring. All
 animation is disabled under `prefers-reduced-motion`.
 
 ## Browser mode
