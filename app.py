@@ -10,6 +10,7 @@ original.
 import base64
 import json
 import os
+import sys
 import traceback
 import webbrowser
 
@@ -61,7 +62,9 @@ class Api:
         return dest
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller unpacks bundled data files (index.html, tailwind.js, logo.png)
+# into sys._MEIPASS at runtime instead of next to the real executable.
+HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 
 window = webview.create_window(
     "GetRounded", os.path.join(HERE, "index.html"), js_api=Api(),

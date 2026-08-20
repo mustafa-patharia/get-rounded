@@ -11,11 +11,11 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
-# --- macOS: the app bundle plus the source it runs from
+# --- macOS: self-contained app bundle (Python + deps baked in via PyInstaller)
 [ -d GetRounded.app ] || ./make_app.sh
 mkdir -p "$STAGE/mac"
 cp -R GetRounded.app "$STAGE/mac/"
-cp "${COMMON[@]}" GetRounded.command make_app.sh "$STAGE/mac/"
+cp README.md LICENSE "$STAGE/mac/"
 (cd "$STAGE/mac" && zip -qr "$OLDPWD/$OUT/GetRounded-$VERSION-macOS.zip" .)
 
 # --- Windows

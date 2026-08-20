@@ -62,10 +62,18 @@ tailwind.config = { darkMode: 'class' }
     animation: sweep 1s ease-in-out infinite; }
   @keyframes sweep { from { top: -45% } to { top: 105% } }
 
-  /* corner guides: arcs drawn on the real radius, fading when you stop */
-  #guide { position: absolute; inset: 0; pointer-events: none;
-           opacity: 0; transition: opacity .45s ease; }
-  #guide.on { opacity: 1; transition: opacity .12s ease; }
+  /* batch thumbnails */
+  .thumb { position: relative; width: 60px; height: 60px; border-radius: calc(var(--radius) - 2px);
+    overflow: hidden; cursor: pointer; border: 2px solid transparent;
+    background: hsl(var(--muted)); transition: border-color .15s, transform .15s;
+    animation: fadeup .25s ease-out backwards; }
+  .thumb:hover { transform: translateY(-2px); }
+  .thumb.sel { border-color: hsl(var(--ring)); }
+  .thumb canvas { width: 100%; height: 100%; display: block; object-fit: cover; }
+  .thumb .x { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px;
+    border-radius: 9999px; border: 0; line-height: 1; font-size: 10px; cursor: pointer;
+    background: hsl(0 0% 0% / .6); color: #fff; opacity: 0; transition: opacity .15s; }
+  .thumb:hover .x { opacity: 1; }
 
   /* progress bar under the drop zone */
   #bar { height: 2px; background: hsl(var(--primary)); width: 0;
@@ -136,10 +144,18 @@ tailwind.config = { darkMode: 'class' }
     <div id="stage" class="col-start-1 row-start-1 hidden">
       <canvas id="preview" class="block max-h-[320px] max-w-full"></canvas>
       <div id="sweep"></div>
-      <canvas id="guide"></canvas>
     </div>
   </div>
   <div id="bar" class="mt-1"></div>
+
+  <!-- batch: one thumbnail per loaded image, click to preview -->
+  <div id="strip" class="mt-3 hidden">
+    <div class="mb-2 flex items-center justify-between">
+      <span id="strip-count" class="muted text-xs"></span>
+      <button id="clear" class="link text-xs">Clear all</button>
+    </div>
+    <div id="thumbs" class="flex flex-wrap gap-2"></div>
+  </div>
   <input id="file" type="file" accept="image/*" multiple class="hidden">
 
   <!-- controls -->
@@ -222,7 +238,8 @@ tailwind.config = { darkMode: 'class' }
 <script>
 const $ = id => document.getElementById(id);
 const canvas = $('preview'), ctx = canvas.getContext('2d');
-let images = [];        // {name, bitmap}
+let images = [];        // {name, path, bitmap}
+let sel = 0;            // which image the preview is showing
 let dirHandle = null;   // output folder (Chrome/Edge)
 
 let native = false;   // running inside the pywebview desktop shell
@@ -264,7 +281,7 @@ function render(bitmap, percent, target) {
 
 function updatePreview() {
   const p = +$('radius').value;
-  const img = images[0];
+  const img = images[sel];
   $('rval').textContent = img
     ? `${p}% · ${Math.round(Math.min(img.bitmap.width, img.bitmap.height) * p / 100)}px`
     : `${p}%`;
@@ -272,60 +289,178 @@ function updatePreview() {
   render(img.bitmap, p, canvas);
   $('stage').classList.remove('hidden');
   $('empty').classList.add('hidden');
-  drawGuide(p);
+  if (guideAlpha > 0) drawGuides(canvas, p, guideAlpha);
 }
 
-// Corner guides: arcs traced on the exact curve the image is being cut to, in
-// display pixels. Redrawn in place each frame — no element churn, no flicker.
-let guideTimer;
-function drawGuide(percent) {
-  const g = $('guide'), r = g.getBoundingClientRect();
-  const dpr = devicePixelRatio || 1;
-  if (!r.width) return;
-  if (g.width !== Math.round(r.width * dpr)) {
-    g.width = Math.round(r.width * dpr);
-    g.height = Math.round(r.height * dpr);
-  }
-  const c = g.getContext('2d');
-  c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c.clearRect(0, 0, r.width, r.height);
+// Corner guides are drawn straight onto the preview canvas, in image pixels.
+// Line widths are divided by the on-screen scale so they stay 2px visually
+// whatever the image size. The saved file is rendered on a separate canvas,
+// so nothing here can end up in the output.
+const GUIDE_COLOR = '#2AA9FF';   // logo blue, legible on light and dark images
 
-  const rad = Math.min(r.width, r.height) * percent / 100;
-  const arm = Math.max(14, Math.min(r.width, r.height) * 0.18);
-  const accent = getComputedStyle(document.documentElement)
-    .getPropertyValue('--ring').trim();
+function drawGuides(target, percent, alpha) {
+  const c = target.getContext('2d');
+  const w = target.width, h = target.height;
+  const scale = w / (target.clientWidth || w);      // image px per CSS px
+  const min = Math.min(w, h);
+  const rad = min * percent / 100;
 
-  c.lineWidth = 2;
-  c.lineCap = 'round';
-  c.strokeStyle = `hsl(${accent})`;
-  c.shadowColor = `hsl(${accent} / .8)`;
-  c.shadowBlur = 8;
+  // Each corner gets an arc plus two short straight arms. The arms shrink as
+  // the radius grows, and once an edge has no straight run left the arc itself
+  // is trimmed — so the four marks always stay four marks and never close up
+  // into a plain outline.
+  const gap = min * 0.20;                    // break to preserve between marks
+  const armMax = min * 0.13;
+  const armX = Math.max(0, Math.min(armMax, (w - 2 * rad) / 2 - gap / 2));
+  const armY = Math.max(0, Math.min(armMax, (h - 2 * rad) / 2 - gap / 2));
+  const trim = (span) => rad <= 0 ? 0
+    : Math.min(0.38, Math.max(0, (gap - (span - 2 * rad)) / 2 / rad));
+  const trimH = trim(w), trimV = trim(h);    // radians off the arc ends
 
-  // one L-shaped bracket per corner, its elbow bent to the current radius
-  const w = r.width - 1, h = r.height - 1;
+  const lw = 2 * scale;
+  const x0 = lw / 2, y0 = lw / 2, x1 = w - lw / 2, y1 = h - lw / 2;
+  const HALF = Math.PI / 2;
+
+  // cx, cy = arc centre | a0 = angle at the vertical edge, a1 at the horizontal
   const corners = [
-    [0.5, 0.5,  1,  1], [w, 0.5, -1,  1],
-    [0.5, h,    1, -1], [w, h,   -1, -1],
+    [x0 + rad, y0 + rad, Math.PI,   1,  1],   // top-left
+    [x1 - rad, y0 + rad, -HALF,    -1,  1],   // top-right
+    [x1 - rad, y1 - rad, 0,        -1, -1],   // bottom-right
+    [x0 + rad, y1 - rad, HALF,      1, -1],   // bottom-left
   ];
-  for (const [x, y, sx, sy] of corners) {
-    c.beginPath();
-    c.moveTo(x + sx * (rad + arm), y);
-    c.lineTo(x + sx * rad, y);
-    c.arcTo(x, y, x, y + sy * rad, rad);
-    c.lineTo(x, y + sy * (rad + arm));
-    c.stroke();
-  }
 
-  g.classList.add('on');
+  const paint = (colour, width) => {
+    c.strokeStyle = colour;
+    c.lineWidth = width;
+    for (const [cx, cy, a0, sx, sy] of corners) {
+      const vertical = sx > 0 ? x0 : x1;      // the edge each arm rides along
+      const horizontal = sy > 0 ? y0 : y1;
+      c.beginPath();
+
+      // Every piece is its own subpath, started with moveTo. Letting arc()
+      // continue from wherever the pen happened to be drew a diagonal across
+      // the corner whenever the arc did not start at the last arm's end.
+      if (armY > 0) {
+        c.moveTo(vertical, cy + sy * armY);   // arm runs out from the tangent point
+        c.lineTo(vertical, cy);
+      }
+      if (armX > 0) {
+        c.moveTo(cx + sx * armX, horizontal);
+        c.lineTo(cx, horizontal);
+      }
+      if (rad > 0) {
+        const from = a0 + (sx * sy > 0 ? trimV : trimH);
+        const to = a0 + HALF - (sx * sy > 0 ? trimH : trimV);
+        if (to > from) {
+          c.moveTo(cx + rad * Math.cos(from), cy + rad * Math.sin(from));
+          c.arc(cx, cy, rad, from, to);
+        }
+      }
+      c.stroke();
+    }
+  };
+
+  c.save();
+  c.globalAlpha = alpha;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  paint('rgba(0, 0, 0, .35)', lw * 2.5);     // halo, so the guide reads on white
+  paint(GUIDE_COLOR, lw);
+  c.restore();
+}
+
+// guides appear while adjusting, then fade out once you stop
+let guideAlpha = 0, guideTimer, fadeFrame;
+function showGuides() {
+  cancelAnimationFrame(fadeFrame);
+  guideAlpha = 1;
   clearTimeout(guideTimer);
-  guideTimer = setTimeout(() => g.classList.remove('on'), 900);
+  guideTimer = setTimeout(fadeGuides, 900);
+}
+
+function fadeGuides() {
+  const start = performance.now();
+  const step = now => {
+    guideAlpha = Math.max(0, 1 - (now - start) / 300);
+    updatePreview();
+    if (guideAlpha > 0) fadeFrame = requestAnimationFrame(step);
+  };
+  fadeFrame = requestAnimationFrame(step);
 }
 
 function ready(list) {
-  images = list;
-  $('save').disabled = !list.length;
-  $('status').textContent = `${list.length} image${list.length > 1 ? 's' : ''} loaded`;
+  // adding more images appends to the batch rather than replacing it
+  const seen = new Set(images.map(i => i.path || i.name));
+  images = images.concat(list.filter(i => !seen.has(i.path || i.name)));
+  sel = Math.min(sel, images.length - 1);
+  $('save').disabled = !images.length;
+  $('status').textContent = `${images.length} image${images.length > 1 ? 's' : ''} loaded`;
+  buildStrip();
+  showGuides();
   updatePreview();
+}
+
+// One thumbnail per loaded image. Click one to preview it, ✕ to drop it.
+function buildStrip() {
+  const strip = $('strip'), box = $('thumbs');
+  strip.classList.toggle('hidden', images.length < 2);
+  box.textContent = '';
+  if (images.length < 2) return;
+
+  $('strip-count').textContent =
+    `${images.length} images — click one to preview, all of them are saved`;
+
+  images.forEach((img, i) => {
+    const el = document.createElement('div');
+    el.className = 'thumb' + (i === sel ? ' sel' : '');
+    el.style.animationDelay = (i * 25) + 'ms';
+    el.title = img.name;
+
+    const t = document.createElement('canvas');
+    const side = 120;                              // 2x for retina
+    t.width = t.height = side;
+    const c = t.getContext('2d');
+    const s = Math.max(side / img.bitmap.width, side / img.bitmap.height);
+    const dw = img.bitmap.width * s, dh = img.bitmap.height * s;
+    c.drawImage(img.bitmap, (side - dw) / 2, (side - dh) / 2, dw, dh);
+    el.appendChild(t);
+
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = 'Remove';
+    x.onclick = e => { e.stopPropagation(); remove(i); };
+    el.appendChild(x);
+
+    el.onclick = () => select(i);
+    box.appendChild(el);
+  });
+}
+
+function select(i) {
+  sel = i;
+  document.querySelectorAll('.thumb').forEach((t, n) => t.classList.toggle('sel', n === i));
+  showGuides();
+  updatePreview();
+}
+
+function remove(i) {
+  images.splice(i, 1);
+  if (sel >= images.length) sel = Math.max(0, images.length - 1);
+  if (!images.length) return reset();
+  $('status').textContent = `${images.length} image${images.length > 1 ? 's' : ''} loaded`;
+  buildStrip();
+  updatePreview();
+}
+
+function reset() {
+  images = [];
+  sel = 0;
+  $('save').disabled = true;
+  $('status').textContent = '';
+  $('stage').classList.add('hidden');
+  $('empty').classList.remove('hidden');
+  buildStrip();
 }
 
 async function load(files) {
@@ -362,9 +497,12 @@ async function pickNative() {
 // coalesce slider input to one render per frame, so dragging stays smooth
 let frame;
 $('radius').oninput = () => {
+  showGuides();
   if (frame) return;
   frame = requestAnimationFrame(() => { frame = 0; updatePreview(); });
 };
+
+$('clear').onclick = reset;
 $('drop').onclick = () => (native ? pickNative() : $('file').click());
 // About dialog
 const about = $('about');
